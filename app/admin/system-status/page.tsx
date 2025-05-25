@@ -14,6 +14,8 @@ interface RouteStatus {
   error?: string
 }
 
+export const dynamic = "force-dynamic"
+
 export default function SystemStatusPage() {
   const [routes, setRoutes] = useState<RouteStatus[]>([])
   const [isChecking, setIsChecking] = useState(false)
