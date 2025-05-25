@@ -1,33 +1,69 @@
-import { createServerClient } from "@/lib/supabase/server"
+import { createClient } from "@/lib/supabase/server"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Building2, Users, CreditCard, TrendingUp } from "lucide-react"
 
+// Força a página a ser renderizada dinamicamente
+export const dynamic = "force-dynamic"
+
 export default async function AdminDashboardPage() {
-  const supabase = createServerClient()
+  let totalCompanies = 0
+  let totalUsers = 0
+  let activeSubscriptions = 0
+  let recentCompanies: any[] = []
+  let recentActivities: any[] = []
 
-  // Buscar estatísticas
-  const [{ count: totalCompanies }, { count: totalUsers }, { count: activeSubscriptions }] = await Promise.all([
-    supabase.from("companies").select("*", { count: "exact", head: true }),
-    supabase.from("users").select("*", { count: "exact", head: true }),
-    supabase.from("companies").select("*", { count: "exact", head: true }).eq("subscription_status", "active"),
-  ])
+  try {
+    const supabase = createClient()
 
-  // Buscar empresas recentes
-  const { data: recentCompanies } = await supabase
-    .from("companies")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(5)
+    // Buscar estatísticas com tratamento de erro
+    const [companiesResult, usersResult, subscriptionsResult] = await Promise.allSettled([
+      supabase.from("companies").select("*", { count: "exact", head: true }),
+      supabase.from("users").select("*", { count: "exact", head: true }),
+      supabase.from("companies").select("*", { count: "exact", head: true }).eq("subscription_status", "active"),
+    ])
 
-  // Buscar atividades recentes
-  const { data: recentActivities } = await supabase
-    .from("activity_log")
-    .select(`
-      *,
-      company:companies(name)
-    `)
-    .order("created_at", { ascending: false })
-    .limit(10)
+    if (companiesResult.status === "fulfilled") {
+      totalCompanies = companiesResult.value.count || 0
+    }
+    if (usersResult.status === "fulfilled") {
+      totalUsers = usersResult.value.count || 0
+    }
+    if (subscriptionsResult.status === "fulfilled") {
+      activeSubscriptions = subscriptionsResult.value.count || 0
+    }
+
+    // Buscar empresas recentes com tratamento de erro
+    try {
+      const { data: companies } = await supabase
+        .from("companies")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(5)
+
+      recentCompanies = companies || []
+    } catch (error) {
+      console.error("Erro ao buscar empresas recentes:", error)
+    }
+
+    // Buscar atividades recentes com tratamento de erro
+    try {
+      const { data: activities } = await supabase
+        .from("activity_log")
+        .select(`
+          *,
+          company:companies(name)
+        `)
+        .order("created_at", { ascending: false })
+        .limit(10)
+
+      recentActivities = activities || []
+    } catch (error) {
+      console.error("Erro ao buscar atividades recentes:", error)
+    }
+  } catch (error) {
+    console.error("Erro ao conectar com Supabase:", error)
+    // Continua com valores padrão se houver erro
+  }
 
   return (
     <div className="space-y-6">
@@ -43,7 +79,7 @@ export default async function AdminDashboardPage() {
             <Building2 className="h-4 w-4 text-gray-400" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{totalCompanies || 0}</div>
+            <div className="text-2xl font-bold">{totalCompanies}</div>
             <p className="text-xs text-gray-600 mt-1">Total de empresas registradas</p>
           </CardContent>
         </Card>
@@ -54,7 +90,7 @@ export default async function AdminDashboardPage() {
             <Users className="h-4 w-4 text-gray-400" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{totalUsers || 0}</div>
+            <div className="text-2xl font-bold">{totalUsers}</div>
             <p className="text-xs text-gray-600 mt-1">Total de usuários registrados</p>
           </CardContent>
         </Card>
@@ -65,7 +101,7 @@ export default async function AdminDashboardPage() {
             <CreditCard className="h-4 w-4 text-gray-400" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{activeSubscriptions || 0}</div>
+            <div className="text-2xl font-bold">{activeSubscriptions}</div>
             <p className="text-xs text-gray-600 mt-1">Empresas com assinatura ativa</p>
           </CardContent>
         </Card>
@@ -77,7 +113,7 @@ export default async function AdminDashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {totalCompanies ? `${Math.round(((activeSubscriptions || 0) / totalCompanies) * 100)}%` : "0%"}
+              {totalCompanies > 0 ? `${Math.round((activeSubscriptions / totalCompanies) * 100)}%` : "0%"}
             </div>
             <p className="text-xs text-gray-600 mt-1">Teste → Assinatura paga</p>
           </CardContent>
@@ -91,7 +127,7 @@ export default async function AdminDashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {recentCompanies && recentCompanies.length > 0 ? (
+              {recentCompanies.length > 0 ? (
                 recentCompanies.map((company) => (
                   <div key={company.id} className="flex items-center justify-between">
                     <div>
@@ -128,7 +164,7 @@ export default async function AdminDashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {recentActivities && recentActivities.length > 0 ? (
+              {recentActivities.length > 0 ? (
                 recentActivities.map((activity) => (
                   <div key={activity.id} className="flex items-start space-x-3">
                     <div className="flex-shrink-0">
