@@ -1,88 +1,70 @@
-import { type NextRequest, NextResponse } from "next/server"
-import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs"
+import { createServerClient } from "@supabase/ssr"
+import { NextResponse, type NextRequest } from "next/server"
 
 export async function middleware(request: NextRequest) {
-  // Cria o cliente do Supabase para verificar autenticação
-  const res = NextResponse.next()
-  const supabase = createMiddlewareClient({ req: request, res })
+  let supabaseResponse = NextResponse.next({
+    request,
+  })
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({
+            request,
+          })
+          cookiesToSet.forEach(({ name, value, options }) => supabaseResponse.cookies.set(name, value, options))
+        },
+      },
+    },
+  )
+
   const {
-    data: { session },
-  } = await supabase.auth.getSession()
+    data: { user },
+  } = await supabase.auth.getUser()
 
-  const url = request.nextUrl
-  const hostname = request.headers.get("host") || ""
-  const path = url.pathname
+  const isAuthPage = request.nextUrl.pathname.startsWith("/auth")
+  const isProtectedRoute =
+    request.nextUrl.pathname.startsWith("/app") || request.nextUrl.pathname.startsWith("/onboarding")
+  const isPublicRoute = request.nextUrl.pathname.startsWith("/careers") || request.nextUrl.pathname === "/"
 
-  // Verifica se estamos em ambiente de desenvolvimento
-  const isDev = process.env.NODE_ENV === "development"
-  const baseHost = isDev ? "localhost:3000" : "miniats.com"
-
-  // Extrai o subdomínio
-  let subdomain = hostname.replace(`.${baseHost}`, "")
-
-  // Em desenvolvimento, usamos um formato diferente: localhost:3000/app, localhost:3000/admin, etc.
-  if (isDev) {
-    subdomain = hostname.split(":")[0] === "localhost" ? path.split("/")[1] : subdomain
+  // Redirecionar para login se não autenticado e tentando acessar rota protegida
+  if (!user && isProtectedRoute) {
+    const redirectUrl = new URL("/auth/login", request.url)
+    redirectUrl.searchParams.set("redirectTo", request.nextUrl.pathname)
+    return NextResponse.redirect(redirectUrl)
   }
 
-  // Rotas públicas que não precisam de autenticação
-  const publicRoutes = ["/", "/auth/login", "/auth/signup", "/auth/callback", "/api/webhooks"]
-  const isPublicRoute = publicRoutes.some((route) => path.startsWith(route))
+  // Redirecionar para dashboard se autenticado e tentando acessar páginas de auth
+  if (user && isAuthPage) {
+    // Verificar se o usuário tem uma empresa
+    const { data: userData } = await supabase.from("users").select("company_id").eq("email", user.email).single()
 
-  // Se for a rota raiz (/), não fazer nada e permitir o acesso à página inicial
-  if (path === "/") {
-    return res
+    if (userData?.company_id) {
+      return NextResponse.redirect(new URL("/app/dashboard", request.url))
+    } else {
+      return NextResponse.redirect(new URL("/onboarding", request.url))
+    }
   }
 
-  // Roteamento baseado no subdomínio
-  if (subdomain === "app") {
-    // Painel da empresa - requer autenticação
-    if (!session && !isPublicRoute) {
-      return NextResponse.redirect(new URL("/auth/login", request.url))
-    }
+  // Verificar se usuário autenticado tem empresa ao acessar /app
+  if (user && request.nextUrl.pathname.startsWith("/app")) {
+    const { data: userData } = await supabase.from("users").select("company_id").eq("email", user.email).single()
 
-    // Se estiver autenticado e tentar acessar páginas de auth, redireciona para o dashboard
-    if (session && (path.startsWith("/auth/login") || path.startsWith("/auth/signup"))) {
-      return NextResponse.redirect(new URL("/dashboard", request.url))
+    if (!userData?.company_id) {
+      return NextResponse.redirect(new URL("/onboarding", request.url))
     }
-
-    // Redireciona para o onboarding se o usuário não tiver uma empresa associada
-    // Isso seria implementado verificando se o usuário tem company_id
-
-    // Reescreve a URL para o app
-    if (!path.startsWith("/app")) {
-      url.pathname = `/app${path}`
-      return NextResponse.rewrite(url)
-    }
-  } else if (subdomain === "admin") {
-    // Painel de administração - requer autenticação e verificação de admin
-    if (!session) {
-      return NextResponse.redirect(new URL("/auth/login", request.url))
-    }
-
-    // Reescreve a URL para o admin
-    if (!path.startsWith("/admin")) {
-      url.pathname = `/admin${path}`
-      return NextResponse.rewrite(url)
-    }
-  } else if (subdomain && subdomain !== "www") {
-    // Página de carreiras da empresa
-    // Reescreve a URL para a página de carreiras da empresa específica
-    url.pathname = `/careers/${subdomain}${path}`
-    return NextResponse.rewrite(url)
   }
 
-  return res
+  return supabaseResponse
 }
 
-// Configuração para que o middleware seja executado em todas as rotas
 export const config = {
-  matcher: [
-    /*
-     * Corresponde a todas as rotas exceto:
-     * 1. Arquivos estáticos (_next/static, favicon.ico, etc.)
-     * 2. Rotas de API que não precisam de middleware
-     */
-    "/((?!_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
 }
